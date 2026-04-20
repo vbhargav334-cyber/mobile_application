@@ -1,0 +1,120 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helpers
+    function isSignedIn() { return request.auth != null; }
+    function userDoc() { return get(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function role() { return userDoc().data.role; }
+    function isRole(r) { return isSignedIn() && role() == r; }
+    function sameSchool(resource) {
+      return resource.data.schoolId == userDoc().data.schoolId;
+    }
+
+    // Users can read their own doc. Admin/principal can manage users in same school.
+    match /users/{uid} {
+      allow read: if isSignedIn() && (
+        request.auth.uid == uid ||
+        isRole('admin') ||
+        isRole('principal') ||
+        isRole('teacher')
+      );
+      allow create: if isRole('admin') || isRole('principal');
+      allow update: if request.auth.uid == uid || isRole('admin') || isRole('principal');
+      allow delete: if isRole('admin');
+    }
+
+    // Classes: readable by any signed-in same-school user. Writable by admin/principal.
+    match /classes/{classId} {
+      allow read: if isSignedIn();
+      allow write: if isRole('admin') || isRole('principal');
+    }
+
+    match /subjects/{id} {
+      allow read: if isSignedIn();
+      allow write: if isRole('admin') || isRole('principal') || isRole('teacher');
+    }
+
+    // Attendance: teachers and above write; student reads own, parent reads child's.
+    match /attendance/{id} {
+      allow read: if isSignedIn() && (
+        resource.data.studentId == request.auth.uid ||
+        request.auth.uid in userDoc().data.childIds ||
+        isRole('teacher') || isRole('principal') || isRole('admin')
+      );
+      allow create, update: if isRole('teacher') || isRole('principal') || isRole('admin');
+      allow delete: if isRole('principal') || isRole('admin');
+    }
+
+    // Marks: same pattern.
+    match /marks/{id} {
+      allow read: if isSignedIn() && (
+        resource.data.studentId == request.auth.uid ||
+        resource.data.studentId in userDoc().data.childIds ||
+        isRole('teacher') || isRole('principal') || isRole('admin')
+      );
+      allow write: if isRole('teacher') || isRole('principal') || isRole('admin');
+    }
+
+    // Fees: read self/child; office/admin writes.
+    match /fees/{id} {
+      allow read: if isSignedIn() && (
+        resource.data.studentId == request.auth.uid ||
+        resource.data.studentId in userDoc().data.childIds ||
+        isRole('principal') || isRole('admin')
+      );
+      allow write: if isRole('admin') || isRole('principal');
+    }
+
+    // Announcements: anyone in school reads; teachers/principal/admin write.
+    match /announcements/{id} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isRole('teacher') || isRole('principal') || isRole('admin');
+    }
+
+    // Assignments
+    match /assignments/{id} {
+      allow read: if isSignedIn();
+      allow write: if isRole('teacher') || isRole('principal') || isRole('admin');
+    }
+
+    // Assignment submissions
+    match /submissions/{id} {
+      allow read: if isSignedIn() && (
+        resource.data.studentId == request.auth.uid ||
+        isRole('teacher') || isRole('principal') || isRole('admin')
+      );
+      allow create: if isRole('student');
+      allow update: if isRole('teacher') || isRole('principal') || isRole('admin');
+      allow delete: if isRole('admin');
+    }
+
+    // Leave requests
+    match /leaveRequests/{id} {
+      allow read: if isSignedIn() && (
+        resource.data.studentId == request.auth.uid ||
+        resource.data.studentId in userDoc().data.childIds ||
+        isRole('teacher') || isRole('principal') || isRole('admin')
+      );
+      allow create: if isRole('student') || isRole('parent');
+      allow update: if isRole('teacher') || isRole('principal') || isRole('admin');
+    }
+
+    // Chat threads + messages
+    match /chats/{chatId} {
+      allow read, write: if isSignedIn() &&
+        request.auth.uid in resource.data.participants;
+
+      match /messages/{msgId} {
+        allow read, write: if isSignedIn() &&
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+      }
+    }
+
+    // Events (school-wide)
+    match /events/{id} {
+      allow read: if isSignedIn();
+      allow write: if isRole('principal') || isRole('admin');
+    }
+  }
+}
